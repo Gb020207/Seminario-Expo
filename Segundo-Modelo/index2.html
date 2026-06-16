@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Commands - Inmune a Códecs</title>
+    <style>
+        :root { --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc; --card-bg: #ffffff; --text: #1e293b; }
+        body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { text-align: center; background: var(--card-bg); padding: 2.5rem; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 400px; width: 90%; }
+        h1 { font-size: 1.8rem; margin-bottom: 0.5rem; color: #0f172a; }
+        p.subtitle { color: #64748b; font-size: 0.95rem; margin-bottom: 2rem; }
+        .btn-record { background-color: var(--primary); color: white; border: none; padding: 1rem 2rem; font-size: 1.1rem; font-weight: 600; border-radius: 50px; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(37,99,235,0.2); }
+        .btn-record:hover { background-color: var(--primary-hover); transform: translateY(-2px); }
+        .btn-record.recording { background-color: #ef4444; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.04); } 100% { transform: scale(1); } }
+        .result-box { margin-top: 2.5rem; border-top: 2px solid #f1f5f9; padding-top: 1.5rem; }
+        .command-display { font-size: 2.5rem; font-weight: 800; color: var(--primary); margin: 0.5rem 0; text-transform: uppercase; min-height: 3.5rem; }
+        .confidence-display { font-size: 0.9rem; color: #64748b; }
+        .status-text { font-size: 0.9rem; font-weight: 500; color: #64748b; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Speech Commands</h1>
+        <p class="subtitle">Presiona el botón e indica una orden en inglés (ej: <i>"Up", "Stop", "Yes"</i>)</p>
+        
+        <button id="recordBtn" class="btn-record">🎤 Hablar 1 Segundo</button>
+        <div id="status" class="status-text">Cargando micrófono...</div>
+
+        <div class="result-box">
+            <span style="font-size: 0.85rem; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Resultado</span>
+            <div id="command" class="command-display">---</div>
+            <div id="confidence" class="confidence-display">Precisión: --%</div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8000/predict_json";
+        const recordBtn = document.getElementById('recordBtn');
+        const statusText = document.getElementById('status');
+        const commandDisplay = document.getElementById('command');
+        const confidenceDisplay = document.getElementById('confidence');
+
+        let audioContext;
+        let mediaStream;
+        let audioBuffer = [];
+        const TARGET_SAMPLE_RATE = 16000;
+
+        async function setupAudio() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                statusText.innerText = "Micrófono listo";
+            } catch (err) {
+                statusText.innerText = "Error: Permiso de micrófono denegado.";
+                recordBtn.disabled = true;
+            }
+        }
+
+        async function iniciarGrabacion() {
+            audioBuffer = [];
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SAMPLE_RATE });
+            
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            processor.onaudioprocess = (e) => {
+                const canalInput = e.inputBuffer.getChannelData(0);
+                // Clonamos las muestras numéricas crudas
+                audioBuffer.push(...canalInput);
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            recordBtn.classList.add('recording');
+            recordBtn.innerText = "🛑 Escuchando...";
+            statusText.innerText = "¡Habla ahora!";
+
+            // Graba exactamente 1.2 segundos para asegurar capturar la palabra entera
+            setTimeout(async () => {
+                // Detener el flujo del procesador
+                source.disconnect();
+                processor.disconnect();
+                audioContext.close();
+
+                recordBtn.classList.remove('recording');
+                recordBtn.innerText = "🎤 Hablar 1 Segundo";
+                statusText.innerText = "Enviando matriz numérica a la IA...";
+
+                console.log("Cantidad de muestras numéricas a enviar:", audioBuffer.length);
+                await enviarMatrizNumérica(audioBuffer);
+            }, 1200);
+        }
+
+        async function enviarMatrizNumérica(floatArray) {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ "samples": floatArray })
+                });
+
+                if (!response.ok) throw new Error("Error interno del servidor de Python");
+
+                const data = await response.json();
+                if (data.success) {
+                    commandDisplay.innerText = data.command;
+                    confidenceDisplay.innerText = `Precisión: ${data.confidence}%`;
+                    statusText.innerText = "Análisis completado de forma segura";
+                }
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = "Error de comunicación con el Backend.";
+            }
+        }
+
+        recordBtn.addEventListener('click', iniciarGrabacion);
+        setupAudio();
+    </script>
+</body>
+</html>
